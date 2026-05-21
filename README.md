@@ -277,7 +277,6 @@ ANTHROPIC_API_KEY=your_key_here
 CORS_ORIGINS=http://localhost:3000
 ```
 
-> `EMERGENT_LLM_KEY` is still accepted for backward compatibility.
 
 ```bash
 python -m uvicorn server:app --reload --host 0.0.0.0 --port 8000
