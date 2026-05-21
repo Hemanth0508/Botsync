@@ -1,6 +1,13 @@
 import React from "react";
+import { motion } from "framer-motion";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { TrendingUp, Bot, CheckCircle2, AlertOctagon, BatteryCharging } from "lucide-react";
+import { TrendingUp, Bot, CheckCircle2, AlertOctagon, BatteryCharging, Radar } from "lucide-react";
+
+const FORECAST_LEVEL = {
+  nominal:  { color: "#00E59B", label: "Nominal",  bg: "rgba(0,229,155,0.06)",  border: "rgba(0,229,155,0.2)"  },
+  elevated: { color: "#FFB020", label: "Elevated", bg: "rgba(255,176,32,0.06)", border: "rgba(255,176,32,0.25)" },
+  critical: { color: "#FF3B30", label: "Critical", bg: "rgba(255,59,48,0.06)",  border: "rgba(255,59,48,0.25)"  },
+};
 
 function Stat({ label, value, accent, suffix, Icon, testId, sub }) {
   return (
@@ -35,7 +42,7 @@ function ChartTooltip({ active, payload, label }) {
   );
 }
 
-export default function MetricsPanel({ metrics, history }) {
+export default function MetricsPanel({ metrics, history, forecast }) {
   if (!metrics) return (
     <div className="panel p-4 text-[#64748B] font-mono-tech text-xs uppercase tracking-widest" data-testid="metrics-panel">
       warming up…
@@ -48,9 +55,11 @@ export default function MetricsPanel({ metrics, history }) {
     congestion: h.congestion,
   }));
 
-  // Chunk E — split active vs charging
-  const activeCount   = metrics.active;
+  const activeCount = metrics.active;
   const chargingCount = metrics.charging ?? 0;
+  const fc = forecast || {};
+  const level = fc.level || "nominal";
+  const levelCfg = FORECAST_LEVEL[level] || FORECAST_LEVEL.nominal;
 
   return (
     <div className="panel flex flex-col overflow-hidden" data-testid="metrics-panel">
@@ -69,6 +78,62 @@ export default function MetricsPanel({ metrics, history }) {
           <span className="font-mono-tech text-[9px] uppercase tracking-widest text-[#64748B]">tick {metrics.t}</span>
         </div>
       </div>
+
+      {forecast?.level && (
+        <div
+          className="mx-3 mt-3 rounded-md border px-3 py-2.5"
+          style={{ background: levelCfg.bg, borderColor: levelCfg.border }}
+          data-testid="operational-forecast"
+        >
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-1.5">
+              <Radar size={11} style={{ color: levelCfg.color }} />
+              <span className="font-mono-tech text-[9px] uppercase tracking-widest text-[#64748B]">
+                predictive ops
+              </span>
+            </div>
+            <span
+              className="font-mono-tech text-[9px] uppercase tracking-widest px-1.5 py-0.5 rounded border"
+              style={{
+                color: levelCfg.color,
+                borderColor: `${levelCfg.color}50`,
+                background: `${levelCfg.color}12`,
+              }}
+              data-testid="forecast-level"
+            >
+              {levelCfg.label}
+            </span>
+          </div>
+          {fc.escalation_probability != null && (
+            <div className="font-mono-tech text-[10px] text-[#94A3B8] mb-2">
+              escalation probability{" "}
+              <span className="text-white">{fc.escalation_probability}%</span>
+              {fc.signals && (
+                <span className="text-[#475569] ml-2">
+                  · spikes {fc.signals.spike_frequency} · reroutes {fc.signals.reroute_activity}
+                </span>
+              )}
+            </div>
+          )}
+          <ul className="space-y-1.5 list-none">
+            {(fc.alerts || []).map((alert, idx) => (
+              <motion.li
+                key={idx}
+                initial={{ opacity: 0, x: -4 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ delay: idx * 0.05, duration: 0.18 }}
+                className="text-[11px] leading-snug text-[#CBD5E1] flex gap-2"
+                data-testid={`forecast-alert-${idx}`}
+              >
+                <span className="font-mono-tech shrink-0 mt-px" style={{ color: levelCfg.color }}>
+                  ▸
+                </span>
+                <span>{alert}</span>
+              </motion.li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-2 p-3 pb-2">
         <Stat

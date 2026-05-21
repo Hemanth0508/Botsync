@@ -42,7 +42,7 @@ function getRichLabel(r) {
   return STATUS_STYLE[r.status]?.label || r.status;
 }
 
-export default function WarehouseMap({ data, selectedRobotId, onSelectRobot }) {
+export default function WarehouseMap({ data, selectedRobotId, onSelectRobot, replayEvent }) {
   const [hovered, setHovered] = useState(null);
 
   if (!data) return (
@@ -51,7 +51,11 @@ export default function WarehouseMap({ data, selectedRobotId, onSelectRobot }) {
     </div>
   );
 
-  const { grid, zones, robots, vendors, trails = [], zone_congestion_stats = [] } = data;
+  const { grid, zones, robots, vendors, trails = [], zone_congestion_stats = [], operational_forecast } = data;
+  const replayRobotId = replayEvent?.robot_id ?? null;
+  const zoneForecast = Object.fromEntries(
+    (operational_forecast?.zone_risks || []).map((zr) => [zr.id, zr]),
+  );
   const xPct = (v) => (v / grid.w) * 100;
   const yPct = (v) => (v / grid.h) * 100;
 
@@ -85,9 +89,11 @@ export default function WarehouseMap({ data, selectedRobotId, onSelectRobot }) {
       <div className="absolute top-0 left-0 right-0 flex items-center justify-between px-4 py-2 border-b border-[#243041] bg-[#0B0F14]/90 backdrop-blur z-20 rounded-t-lg">
         <div className="font-mono-tech text-[10px] uppercase tracking-widest text-[#94A3B8]">
           warehouse · <span className="text-cyan">{grid.w} × {grid.h}</span>
-          {selectedRobotId && (
+          {replayRobotId ? (
+            <span className="ml-3 text-amber">· replay {replayRobotId}</span>
+          ) : selectedRobotId ? (
             <span className="ml-3 text-amber">· inspecting {selectedRobotId}</span>
-          )}
+          ) : null}
         </div>
         <div className="flex items-center gap-4 text-[10px] font-mono-tech uppercase tracking-widest" data-testid="vendor-legend">
           {selectedRobotId && routePts.length > 0 && (
@@ -121,20 +127,34 @@ export default function WarehouseMap({ data, selectedRobotId, onSelectRobot }) {
           const hasCharging = robots.some(r => r.status === "charging" && r.task?.zone === z.id);
           const stats = zoneStats[z.id];
           const spikes = stats?.spikes || 0;
+          const forecast = zoneForecast[z.id];
+          const forecastCritical = forecast?.level === "critical";
+          const forecastElevated = forecast?.level === "elevated";
 
           // Spike tinting: 0 = neutral, 1-3 = subtle amber, 4+ = soft red pulse
           const spikeHigh = spikes >= 4;
           const spikeMed  = spikes >= 1 && spikes < 4;
-          const borderColor = hasCharging
+          let borderColor = hasCharging
             ? "rgba(0,229,155,0.35)"
             : spikeHigh ? "rgba(255,59,48,0.4)"
             : spikeMed  ? "rgba(255,176,32,0.3)"
             : "#243041";
-          const bgColor = hasCharging
+          let bgColor = hasCharging
             ? "rgba(0,229,155,0.04)"
             : spikeHigh ? "rgba(255,59,48,0.05)"
             : spikeMed  ? "rgba(255,176,32,0.03)"
             : "rgba(255,255,255,0.012)";
+
+          if (!hasCharging && forecastCritical) {
+            borderColor = "rgba(255,59,48,0.55)";
+            bgColor = "rgba(255,59,48,0.07)";
+          } else if (!hasCharging && forecastElevated) {
+            borderColor = "rgba(0,209,255,0.4)";
+            bgColor = "rgba(0,209,255,0.04)";
+          }
+
+          const pulseForecast = forecastCritical && !spikeHigh;
+          const pulseElevated = forecastElevated && !spikeHigh && !forecastCritical;
 
           return (
             <motion.div key={z.id}
@@ -144,15 +164,32 @@ export default function WarehouseMap({ data, selectedRobotId, onSelectRobot }) {
                 width: `${xPct(z.w)}%`, height: `${yPct(z.h)}%`,
                 borderColor,
                 background: bgColor,
+                borderStyle: forecast && !hasCharging ? "dashed" : "solid",
               }}
-              animate={spikeHigh ? {
-                borderColor: ["rgba(255,59,48,0.4)", "rgba(255,59,48,0.15)", "rgba(255,59,48,0.4)"],
-              } : {}}
-              transition={spikeHigh ? { duration: 2.5, repeat: Infinity, ease: "easeInOut" } : {}}
+              animate={
+                spikeHigh
+                  ? { borderColor: ["rgba(255,59,48,0.4)", "rgba(255,59,48,0.15)", "rgba(255,59,48,0.4)"] }
+                  : pulseForecast
+                  ? { borderColor: ["rgba(255,59,48,0.55)", "rgba(255,59,48,0.2)", "rgba(255,59,48,0.55)"] }
+                  : pulseElevated
+                  ? { borderColor: ["rgba(0,209,255,0.4)", "rgba(0,209,255,0.15)", "rgba(0,209,255,0.4)"] }
+                  : {}
+              }
+              transition={
+                spikeHigh || pulseForecast || pulseElevated
+                  ? { duration: pulseForecast ? 2 : 3, repeat: Infinity, ease: "easeInOut" }
+                  : {}
+              }
               data-testid={`zone-${z.id}`}
             >
               <div className="absolute top-1 left-2 font-mono-tech text-[9px] uppercase tracking-widest text-[#64748B] flex items-center gap-1.5">
                 {z.label}
+                {forecastCritical && (
+                  <span style={{ color: "#FF3B30", fontSize: "8px" }}>FCST</span>
+                )}
+                {forecastElevated && !forecastCritical && (
+                  <span style={{ color: "#00D1FF", fontSize: "8px" }}>FCST</span>
+                )}
                 {spikeHigh && <span style={{ color: "#FF3B30", fontSize: "8px" }}>▲{spikes}</span>}
                 {spikeMed  && <span style={{ color: "#FFB020", fontSize: "8px" }}>▲{spikes}</span>}
               </div>
@@ -167,9 +204,12 @@ export default function WarehouseMap({ data, selectedRobotId, onSelectRobot }) {
           <AnimatePresence>
             {trails.map((t) => {
               const isSelected = t.robot_id === selectedRobotId;
+              const isReplayTrail = replayRobotId && t.robot_id === replayRobotId;
+              const focusId = replayRobotId || selectedRobotId;
+              const isFocused = isSelected || isReplayTrail;
               const baseOpacity = (1 - Math.min(1, t.age / 8)) * 0.75;
-              const opacity = selectedRobotId
-                ? isSelected ? baseOpacity * 1.4 : baseOpacity * 0.2
+              const opacity = focusId
+                ? isFocused ? baseOpacity * 1.4 : baseOpacity * 0.2
                 : baseOpacity;
               const stroke = t.kind === "retry" ? "#FF3B30" : "#FFB020";
               const strokeWidth = isSelected ? "0.4" : "0.25";
@@ -267,9 +307,10 @@ export default function WarehouseMap({ data, selectedRobotId, onSelectRobot }) {
           const isAlert     = r.status === "rerouting" || r.status === "retrying";
           const isCharging  = r.status === "charging";
           const isCritical  = r.battery < 10;
-          const isSelected  = selectedRobotId === r.id;
-          const isHovered   = hovered === r.id;
-          const isDimmed    = selectedRobotId && !isSelected;
+          const isSelected    = selectedRobotId === r.id;
+          const isReplayRobot = replayRobotId === r.id;
+          const isHovered     = hovered === r.id;
+          const isDimmed      = (selectedRobotId && !isSelected) || (replayRobotId && !isReplayRobot);
 
           const xPos = xPct(r.x);
           const yPos = yPct(r.y);
@@ -283,7 +324,7 @@ export default function WarehouseMap({ data, selectedRobotId, onSelectRobot }) {
               key={r.id}
               data-testid={`robot-${r.id}`}
               className="absolute -translate-x-1/2 -translate-y-1/2 cursor-pointer"
-              style={{ zIndex: isSelected ? 60 : isHovered ? 50 : 10 }}
+              style={{ zIndex: isSelected || isReplayRobot ? 60 : isHovered ? 50 : 10 }}
               animate={{
                 left: `${xPos}%`,
                 top:  `${yPos}%`,
@@ -307,6 +348,16 @@ export default function WarehouseMap({ data, selectedRobotId, onSelectRobot }) {
                     initial={{ opacity: 0, scale: 0.7 }}
                     animate={{ opacity: 1, scale: 1 }}
                     transition={{ duration: 0.2 }}
+                  />
+                )}
+
+                {/* Replay focus pulse */}
+                {isReplayRobot && (
+                  <motion.div
+                    className="absolute inset-0 rounded-full pointer-events-none"
+                    style={{ background: "#FFB020" }}
+                    animate={{ opacity: [0.55, 0, 0.55], scale: [1, 2.8, 1] }}
+                    transition={{ duration: 1.8, repeat: Infinity, ease: "easeOut" }}
                   />
                 )}
 
@@ -428,7 +479,9 @@ export default function WarehouseMap({ data, selectedRobotId, onSelectRobot }) {
           {selectedRobotId && routePts.length > 0 && (
             <span className="text-cyan mr-3">{routePts.length} route checkpoints</span>
           )}
-          {selectedRobotId
+          {replayRobotId
+            ? <span className="text-amber">replaying {replayRobotId} · esc to close</span>
+            : selectedRobotId
             ? <span className="text-cyan">inspecting {selectedRobotId} · esc to close</span>
             : "live"
           }

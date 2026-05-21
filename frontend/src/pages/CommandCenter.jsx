@@ -154,7 +154,11 @@ export default function CommandCenter() {
                   className="absolute inset-0 overflow-y-auto overflow-x-hidden p-3 space-y-3"
                   style={{ scrollbarWidth: "thin", scrollbarColor: "#243041 transparent" }}
                 >
-                  <MetricsPanel metrics={data?.metrics} history={data?.metric_history} />
+                  <MetricsPanel
+                    metrics={data?.metrics}
+                    history={data?.metric_history}
+                    forecast={data?.operational_forecast}
+                  />
                   <ControlPanel
                     pausedZones={data?.paused_zones ?? []}
                     congestionSpikeActive={data?.congestion_spike_active ?? false}

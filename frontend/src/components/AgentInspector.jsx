@@ -3,8 +3,9 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   X, Battery, Zap, CheckCircle2, AlertTriangle,
   RotateCcw, GitBranch, Clock, Radio, BatteryCharging,
-  ChevronRight,
+  ChevronRight, Activity,
 } from "lucide-react";
+import ReliabilityChart, { buildReliabilityHistory, resolveTrend } from "./ReliabilityChart";
 
 const EVENT_CFG = {
   task_assigned:       { color: "#00D1FF", Icon: ChevronRight,    label: "Dispatched" },
@@ -154,6 +155,8 @@ export default function AgentInspector({ robot, onClose }) {
   const isCritical = robot.battery < 10;
 
   const lastReroute = [...(robot.history || [])].reverse().find(e => e.type === "reroute");
+  const reliabilityHistory = buildReliabilityHistory(robot);
+  const reliabilityTrend = resolveTrend(reliabilityHistory);
 
   const stateFlow = (robot.history || [])
     .filter(e => ["task_assigned","reroute","task_complete","task_failed","charge_dispatched","charge_started","charge_complete","battery_critical"].includes(e.type))
@@ -294,6 +297,23 @@ export default function AgentInspector({ robot, onClose }) {
                   />
                 </div>
               </div>
+              {reliabilityHistory.length >= 2 && (
+                <div className="mt-2 bg-[#0B0F14] border border-[#243041] rounded-md px-2 pt-2 pb-1">
+                  <div className="flex items-center justify-between mb-1 px-1">
+                    <span className="font-mono-tech text-[9px] uppercase tracking-widest text-[#64748B] flex items-center gap-1">
+                      <Activity size={9} className="text-[#475569]" />
+                      history
+                    </span>
+                    <span
+                      className="font-mono-tech text-[9px] uppercase tracking-widest"
+                      style={{ color: reliabilityTrend.stroke }}
+                    >
+                      {reliabilityTrend.label}
+                    </span>
+                  </div>
+                  <ReliabilityChart history={reliabilityHistory} />
+                </div>
+              )}
             </div>
           );
         })()}

@@ -606,6 +606,135 @@ def zone_congestion_stats() -> List[Dict]:
         })
     return result
 
+
+def compute_operational_forecast() -> Dict:
+    """Heuristic congestion-escalation forecast from live fleet signals."""
+    zone_stats = zone_congestion_stats()
+    metrics = state.metric_history[-1] if state.metric_history else {}
+    congestion_pct = metrics.get("congestion", round(state.congestion_score * 100, 1))
+    recent_window = 12
+
+    spike_frequency = 0
+    zone_risks: List[Dict] = []
+
+    for z in zone_stats:
+        if z["id"] == CHARGING_ZONE_ID:
+            continue
+        hist = state.zone_congestion_history.get(z["id"], [])[-recent_window:]
+        spike_frequency += sum(1 for h in hist if h >= 4)
+
+        trend = 0.0
+        if len(hist) >= 6:
+            trend = sum(hist[-3:]) / 3 - sum(hist[-6:-3]) / 3
+
+        zone_score = 0
+        if z["spikes"] >= 3:
+            zone_score += 25
+        if z["current"] >= 4:
+            zone_score += 20
+        if trend > 0.5:
+            zone_score += 15
+        if z["peak"] >= 5:
+            zone_score += 10
+        if z["avg"] >= 3.5:
+            zone_score += 8
+
+        zone_level = "nominal"
+        if zone_score >= 45:
+            zone_level = "critical"
+        elif zone_score >= 22:
+            zone_level = "elevated"
+
+        zone_risks.append({
+            "id": z["id"],
+            "label": z["label"],
+            "level": zone_level,
+            "score": zone_score,
+        })
+
+    reroute_activity = len(state.trails) + sum(
+        1 for r in state.robots if r["status"] in ("rerouting", "retrying")
+    )
+
+    metric_hist = list(state.metric_history)[-10:]
+    queue_instability = 0.0
+    if len(metric_hist) >= 4:
+        throughputs = [h.get("throughput", 0) for h in metric_hist]
+        avg_tp = sum(throughputs) / len(throughputs)
+        if avg_tp > 0:
+            variance = sum((t - avg_tp) ** 2 for t in throughputs) / len(throughputs)
+            queue_instability = min(30.0, variance * 2.5)
+        congestion_vals = [h.get("congestion", 0) for h in metric_hist]
+        if len(congestion_vals) >= 3 and congestion_vals[-1] > congestion_vals[-3] + 8:
+            queue_instability += 20.0
+
+    reliability_degraded = sum(1 for r in state.robots if r["health_score"] < 75)
+    reliability_critical = sum(1 for r in state.robots if r["health_score"] < 50)
+    reliability_penalty = reliability_degraded * 4 + reliability_critical * 10
+
+    score = 0.0
+    score += min(35.0, spike_frequency * 4)
+    score += min(25.0, reroute_activity * 5)
+    score += queue_instability
+    score += reliability_penalty
+    score += min(20.0, max(0.0, congestion_pct - 40) * 0.4)
+    if state.congestion_spike_ticks_remaining > 0:
+        score += 15.0
+
+    level = "nominal"
+    if score >= 55 or congestion_pct >= 75:
+        level = "critical"
+    elif score >= 28 or congestion_pct >= 50:
+        level = "elevated"
+
+    escalation_probability = round(min(95.0, score * 1.15 + (10 if level == "critical" else 0)), 1)
+
+    alerts: List[str] = []
+    if level == "critical":
+        alerts.append(
+            f"Critical forecast: {escalation_probability}% escalation probability — "
+            "congestion likely to breach recovery capacity within 3–5 ticks."
+        )
+    elif level == "elevated":
+        alerts.append(
+            f"Elevated forecast: density and reroute churn trending up — "
+            "pre-throttle dispatch on peak corridors."
+        )
+    else:
+        alerts.append(
+            "Nominal forecast: congestion envelope stable — no escalation signal in current window."
+        )
+
+    hot_zones = [zr for zr in zone_risks if zr["level"] != "nominal"]
+    for zr in sorted(hot_zones, key=lambda x: -x["score"])[:2]:
+        alerts.append(
+            f"{zr['label']}: {zr['level']} zone risk — spike/occupancy trend favors escalation."
+        )
+    if reroute_activity >= 3 and level != "nominal":
+        alerts.append(
+            f"Reroute activity at {reroute_activity} active revisions — path instability amplifying queue pressure."
+        )
+    if reliability_degraded >= 4 and level != "nominal":
+        alerts.append(
+            f"Reliability degradation on {reliability_degraded} units — failure/retry load may accelerate congestion."
+        )
+
+    return {
+        "level": level,
+        "score": round(min(100.0, score), 1),
+        "escalation_probability": escalation_probability,
+        "alerts": alerts[:4],
+        "zone_risks": zone_risks,
+        "signals": {
+            "spike_frequency": spike_frequency,
+            "reroute_activity": reroute_activity,
+            "queue_instability": round(queue_instability, 1),
+            "reliability_degraded": reliability_degraded,
+            "congestion_pct": congestion_pct,
+        },
+    }
+
+
 # --------------------------------------------------------------------------
 # FastAPI
 # --------------------------------------------------------------------------
@@ -654,6 +783,7 @@ async def sim_state():
         "paused_zones": list(state.paused_zones.keys()),
         "congestion_spike_active": state.congestion_spike_ticks_remaining > 0,
         "zone_congestion_stats": zone_congestion_stats(),
+        "operational_forecast": compute_operational_forecast(),
     }
 
 @api_router.get("/sim/incidents")
@@ -666,6 +796,7 @@ async def sim_metrics():
         "current": state.metric_history[-1] if state.metric_history else None,
         "history": list(state.metric_history),
         "totals": state.totals,
+        "operational_forecast": compute_operational_forecast(),
     }
 
 @api_router.get("/sim/robot/{robot_id}")
@@ -732,57 +863,299 @@ async def control_spike_congestion():
 class InsightRequest(BaseModel):
     horizon: int = Field(default=25)
 
+
+def _strip_list_prefix(raw: str) -> str:
+    raw = raw.strip()
+    for prefix in ("1.", "2.", "3.", "4.", "5.", "1)", "2)", "3)", "4)", "5)", "-", "•", "*"):
+        if raw.startswith(prefix):
+            return raw[len(prefix):].strip()
+    return raw
+
+
+def gather_insight_signals(incidents: List[Dict], metrics: Dict, totals: Dict) -> Dict:
+    zone_congestion = zone_congestion_stats()
+    hot_zones = [
+        z for z in zone_congestion
+        if z["id"] != CHARGING_ZONE_ID and (z["spikes"] >= 2 or z["current"] >= 4 or z["peak"] >= 5)
+    ]
+    vendor_stats: Dict[str, Dict] = {}
+    for vendor in VENDOR_PROFILES:
+        units = [r for r in state.robots if r["vendor"] == vendor]
+        if not units:
+            continue
+        tasks = sum(r["completed"] + r["failed"] for r in units)
+        vendor_stats[vendor] = {
+            "name": VENDOR_PROFILES[vendor]["name"],
+            "count": len(units),
+            "failed": sum(r["failed"] for r in units),
+            "completed": sum(r["completed"] for r in units),
+            "avg_health": round(sum(r["health_score"] for r in units) / len(units), 1),
+            "rerouting": sum(1 for r in units if r["status"] in ("rerouting", "retrying")),
+            "low_battery": sum(1 for r in units if r["battery"] < BATTERY_LOW),
+            "critical_battery": sum(1 for r in units if r["battery"] < BATTERY_CRITICAL),
+            "profile_fail": VENDOR_PROFILES[vendor]["fail"],
+            "fail_share": round(sum(r["failed"] for r in units) / max(1, tasks) * 100, 1),
+        }
+    reroute_incidents = [
+        i for i in incidents
+        if i.get("kind") == "reroute" or "reroute" in (i.get("message") or "").lower()
+    ]
+    degraded = sorted(
+        state.robots,
+        key=lambda r: (r["health_score"], r["battery"]),
+    )[:6]
+    return {
+        "metrics": metrics,
+        "totals": totals,
+        "zone_congestion": zone_congestion,
+        "hot_zones": hot_zones,
+        "vendor_stats": vendor_stats,
+        "reroute_count": len(reroute_incidents),
+        "reroute_incidents": reroute_incidents[:6],
+        "degraded_robots": degraded,
+        "active_trails": len(state.trails),
+        "congestion_pct": metrics.get("congestion", round(state.congestion_score * 100, 1)),
+        "spike_active": state.congestion_spike_ticks_remaining > 0,
+        "paused_zones": [zone_label(z) for z in state.paused_zones],
+    }
+
+
+def infer_operational_analysis(signals: Dict) -> Dict[str, str]:
+    """Rule-based root-cause reasoning from live fleet signals."""
+    metrics = signals["metrics"]
+    totals = signals["totals"]
+    congestion = signals["congestion_pct"]
+    causes: List[str] = []
+    risks: List[str] = []
+    actions: List[str] = []
+
+    hot = signals["hot_zones"]
+    if hot:
+        zone_line = ", ".join(f"{z['label']} (spikes={z['spikes']}, peak={z['peak']})" for z in hot[:3])
+        causes.append(
+            f"Congestion history shows repeated density spikes in {zone_line} — corridor contention is forcing reroute churn."
+        )
+
+    if congestion >= 55 or signals["spike_active"]:
+        causes.append(
+            f"Fleet congestion at {congestion}% with {'active operator spike' if signals['spike_active'] else 'elevated occupancy'} — path blocking is the likely execution bottleneck."
+        )
+
+    vendor_stats = signals["vendor_stats"]
+    unstable_vendor = None
+    v, st = None, None
+    if vendor_stats:
+        unstable_vendor = max(
+            vendor_stats.items(),
+            key=lambda item: item[1]["fail_share"] + (100 - item[1]["avg_health"]) + item[1]["rerouting"] * 8,
+        )
+        v, st = unstable_vendor
+        if st["fail_share"] >= 8 or st["avg_health"] < 80 or st["rerouting"] >= 2:
+            causes.append(
+                f"{st['name']} instability: {st['fail_share']}% failure share, {st['avg_health']}% mean reliability, "
+                f"{st['rerouting']} units in reroute/retry — vendor profile variance is amplifying recovery load."
+            )
+
+    crit = sum(st["critical_battery"] for st in vendor_stats.values())
+    low = sum(st["low_battery"] for st in vendor_stats.values())
+    if crit or low >= 2:
+        worst = min(signals["degraded_robots"], key=lambda r: r["battery"], default=None)
+        unit_ref = f"{worst['id']} · {worst['callsign']} at {worst['battery']:.0f}%" if worst else "multiple units"
+        causes.append(
+            f"Battery state stress: {crit} critical / {low} sub-{int(BATTERY_LOW)}% units — {unit_ref} risks charge-cycle preemption and dispatch gaps."
+        )
+
+    if signals["reroute_count"] >= 2:
+        causes.append(
+            f"{signals['reroute_count']} reroute events in the incident window with {signals['active_trails']} live trail(s) — repeated path revisions indicate stall or handshake recovery loops."
+        )
+
+    if not causes:
+        causes.append(
+            "No dominant single fault; execution variance is distributed within nominal recovery envelopes across zones and vendors."
+        )
+
+    if congestion >= 45:
+        risks.append(
+            f"Operational risk: throughput decay while congestion holds at {congestion}% — outbound/inbound queue pressure likely within 2–3 tick windows."
+        )
+    if metrics.get("recovery_rate", 100) < 70:
+        risks.append(
+            f"Recovery rate at {metrics.get('recovery_rate', 0)}% — retry chains may cascade into SLA breach on high-priority lanes."
+        )
+    if crit:
+        risks.append(
+            f"{crit} unit(s) on critical battery — forced charge dispatch may starve active workflows in adjacent zones."
+        )
+    if not risks:
+        risks.append("Residual risk is moderate; monitor congestion spikes and vendor A retry density for early drift.")
+
+    if hot:
+        actions.append(
+            f"Throttle new dispatches into {hot[0]['label']} until occupancy falls below peak; redistribute 1–2 executing units via operator reroute."
+        )
+    if signals["paused_zones"]:
+        actions.append(
+            f"Hold paused zones ({', '.join(signals['paused_zones'])}) until congestion clears, then staged resume with Vendor B/C preference."
+        )
+    elif unstable_vendor and st and st["rerouting"] >= 1:
+        actions.append(
+            f"Cap concurrent Vendor {v} assignments in Assembly/Inspection; failover persistent retries to Vendor B units."
+        )
+    if low >= 2 or crit:
+        actions.append(
+            "Prioritize charge-cycle dispatch for sub-30% batteries before new workflow intake; clear Charging bay queue first."
+        )
+    if signals["reroute_count"] >= 3:
+        actions.append(
+            "Audit last reroute reasons on lowest-health robots; if congestion-driven, run zone pause + fleet-wide reroute on peak corridor only."
+        )
+    if not actions:
+        actions.append(
+            "Maintain current routing; run spot-check on docking failures in Inspection and confirm recovery rate stays above 75%."
+        )
+
+    return {
+        "root_cause": causes[0] if len(causes) == 1 else f"{causes[0]} {causes[1] if len(causes) > 1 else ''}".strip(),
+        "operational_risk": risks[0] if len(risks) == 1 else " ".join(risks[:2]),
+        "recovery_action": actions[0] if len(actions) == 1 else " ".join(actions[:2]),
+    }
+
+
+def parse_insight_sections(text: str) -> Dict:
+    """Parse LLM output into structured operational sections."""
+    sections = {
+        "root_cause": "",
+        "operational_risk": "",
+        "recovery_action": "",
+        "insights": [],
+    }
+    key_map = {
+        "ROOT CAUSE HYPOTHESIS": "root_cause",
+        "ROOT CAUSE": "root_cause",
+        "ROOT_CAUSE": "root_cause",
+        "OPERATIONAL RISK": "operational_risk",
+        "OPERATIONAL_RISK": "operational_risk",
+        "SUGGESTED RECOVERY ACTION": "recovery_action",
+        "RECOVERY ACTION": "recovery_action",
+        "RECOVERY_ACTION": "recovery_action",
+        "SUGGESTED_RECOVERY_ACTION": "recovery_action",
+    }
+    current = None
+    for raw in str(text).strip().split("\n"):
+        line = raw.strip()
+        if not line:
+            continue
+        upper = line.upper().rstrip(":")
+        matched = None
+        for marker, field in key_map.items():
+            if upper == marker or upper.startswith(marker + ":"):
+                current = field
+                remainder = line.split(":", 1)[-1].strip() if ":" in line else ""
+                if remainder:
+                    sections[field] = remainder
+                matched = field
+                break
+        if matched:
+            continue
+        if current and current in sections and sections[current] != line:
+            sections[current] = f"{sections[current]} {line}".strip()
+        elif not current:
+            cleaned = _strip_list_prefix(line)
+            if cleaned:
+                sections["insights"].append(cleaned)
+    return sections
+
+
+def build_insight_record(
+    analysis: Dict[str, str],
+    metrics: Dict,
+    insights: Optional[List[str]] = None,
+    **extra,
+) -> Dict:
+    rc = analysis.get("root_cause", "")
+    risk = analysis.get("operational_risk", "")
+    action = analysis.get("recovery_action", "")
+    bullet_insights = insights or [
+        f"Root cause hypothesis: {rc}",
+        f"Operational risk: {risk}",
+        f"Suggested recovery: {action}",
+    ]
+    return {
+        "id": str(uuid.uuid4())[:8],
+        "generated_at": now_ts(),
+        "tick": state.tick,
+        "insights": bullet_insights[:5],
+        "root_cause": rc,
+        "operational_risk": risk,
+        "recovery_action": action,
+        "snapshot": metrics,
+        **extra,
+    }
+
+
+def format_insight_context(signals: Dict, incidents: List[Dict]) -> str:
+    metrics = signals["metrics"]
+    totals = signals["totals"]
+    zone_health = " | ".join(
+        f"{z['label']}: cur={z['current']} peak={z['peak']} spikes={z['spikes']}"
+        for z in signals["zone_congestion"] if z["id"] != CHARGING_ZONE_ID
+    )
+    vendor_lines = []
+    for v, st in signals["vendor_stats"].items():
+        vendor_lines.append(
+            f"  Vendor {v} ({st['name']}): fail_share={st['fail_share']}%, "
+            f"avg_health={st['avg_health']}%, rerouting={st['rerouting']}, "
+            f"low_batt={st['low_battery']}, critical={st['critical_battery']}, profile_fail={st['profile_fail']}"
+        )
+    robot_lines = []
+    for r in signals["degraded_robots"]:
+        reason = r.get("last_reroute_reason") or "—"
+        robot_lines.append(
+            f"  {r['id']} · {r['callsign']} (V{r['vendor']}): health={r['health_score']}%, "
+            f"batt={r['battery']:.0f}%, status={r['status']}, last_reroute={reason}"
+        )
+    reroute_lines = [
+        f"  [{i['ts']}] {i['message']}" for i in signals["reroute_incidents"][:5]
+    ]
+    incident_text = "\n".join(
+        f"[{i['ts']}][{i['severity'].upper()}][{i['kind']}] {i['message']}" for i in incidents
+    )
+    return (
+        f"Metrics: active={metrics.get('active')}, charging={metrics.get('charging')}, "
+        f"success={metrics.get('success_rate')}%, recovery={metrics.get('recovery_rate')}%, "
+        f"throughput={metrics.get('throughput')}/min, congestion={signals['congestion_pct']}%\n"
+        f"Totals: completed={totals['tasks_completed']}, failed={totals['tasks_failed']}\n"
+        f"Congestion history: {zone_health}\n"
+        f"Hot zones: {', '.join(z['label'] for z in signals['hot_zones']) or 'none'}\n"
+        f"Paused zones: {', '.join(signals['paused_zones']) or 'none'}\n"
+        f"Active reroute trails: {signals['active_trails']}, reroute incidents in window: {signals['reroute_count']}\n"
+        f"Vendor reliability:\n" + ("\n".join(vendor_lines) or "  n/a") + "\n"
+        f"Lowest-health robots:\n" + ("\n".join(robot_lines) or "  n/a") + "\n"
+        f"Recent reroutes:\n" + ("\n".join(reroute_lines) or "  none") + "\n"
+        f"Incidents ({len(incidents)}):\n{incident_text}"
+    )
+
+
 @api_router.post("/sim/insights")
 async def sim_insights(req: InsightRequest):
     incidents = list(state.incidents)[:req.horizon]
     metrics = state.metric_history[-1] if state.metric_history else {}
     totals = state.totals
+    empty = {
+        "insights": [],
+        "generated_at": now_ts(),
+        "tick": state.tick,
+        "root_cause": "",
+        "operational_risk": "",
+        "recovery_action": "",
+    }
     if not incidents:
-        return {"insights": [], "generated_at": now_ts()}
+        return empty
 
-    incident_text = "\n".join(
-        f"[{i['ts']}][{i['severity'].upper()}][{i['kind']}] {i['message']}" for i in incidents
-    )
-
-    robot_summary_lines = []
-    for r in sorted(state.robots, key=lambda x: x["health_score"])[:6]:
-        robot_summary_lines.append(
-            f"  {r['id']} · {r['callsign']} (Vendor {r['vendor']}): "
-            f"{r['completed']} completed, {r['failed']} failed, "
-            f"health {r['health_score']}%, battery {r['battery']:.0f}%, status={r['status']}"
-        )
-    robot_summary = "\n".join(robot_summary_lines)
-
-    zone_counts: Dict[str, int] = {}
-    for r in state.robots:
-        cz = robot_zone(r)
-        if cz:
-            zone_counts[cz] = zone_counts.get(cz, 0) + 1
-    zone_summary = ", ".join(
-        f"{zone_label(z)}: {n} robots"
-        for z, n in sorted(zone_counts.items(), key=lambda x: -x[1])
-    )
-
-    charging_robots = [r for r in state.robots if r["status"] == "charging"]
-    charging_summary = (
-        f"{len(charging_robots)} robots currently charging"
-        + (f" ({', '.join(r['id'] for r in charging_robots)})" if charging_robots else "")
-    )
-
-    zone_congestion = zone_congestion_stats()
-    zone_health_text = " | ".join(
-        f"{z['label']}: cur={z['current']} peak={z['peak']} spikes={z['spikes']}"
-        for z in zone_congestion if z["id"] != CHARGING_ZONE_ID
-    )
-
-    metrics_text = (
-        f"Active robots: {metrics.get('active', 0)}/{len(state.robots)} | "
-        f"Charging: {metrics.get('charging', 0)} | "
-        f"Tasks completed: {totals['tasks_completed']} | Tasks failed: {totals['tasks_failed']} | "
-        f"Success rate: {metrics.get('success_rate', 0)}% | "
-        f"Recovery rate: {metrics.get('recovery_rate', 0)}% | "
-        f"Throughput: {metrics.get('throughput', 0)}/min | Congestion: {metrics.get('congestion', 0)}%"
-    )
+    signals = gather_insight_signals(incidents, metrics, totals)
+    baseline = infer_operational_analysis(signals)
+    context = format_insight_context(signals, incidents)
 
     try:
         from emergentintegrations.llm.chat import LlmChat, UserMessage
@@ -792,44 +1165,29 @@ async def sim_insights(req: InsightRequest):
         chat = LlmChat(
             api_key=api_key, session_id=f"insights-{state.tick}",
             system_message=(
-                "You are the operational intelligence core for an autonomous warehouse fleet. "
-                "Produce sharp, specific observations a shift supervisor can act on immediately.\n\n"
-                "Rules:\n"
-                "- Always cite specific zone names (Inbound, Outbound, Storage, Assembly, Inspection, Charging)\n"
-                "- Always cite specific robot IDs and callsigns (e.g., A-03 · KITE) when individual units are notable\n"
-                "- Always cite specific percentages, counts, or rates — never vague qualifiers\n"
-                "- Each observation must end with a concrete recommendation\n"
-                "- One sentence each, under 25 words\n"
-                "- Exactly 4 observations\n"
-                "- Plain numbered list (1. 2. 3. 4.) no preamble, no markdown\n"
+                "You are the FRIL operational intelligence layer for a multi-vendor warehouse fleet. "
+                "Infer likely operational root causes — do not merely summarize incidents.\n\n"
+                "You must reason across: zone congestion history (current/peak/spikes), robot reliability scores, "
+                "vendor instability (failure share, reroute/retry counts), battery state, and reroute behavior.\n\n"
+                "Output format (exact labels, no markdown):\n"
+                "ROOT_CAUSE: 1-2 concise sentences citing zones, vendors, robot IDs, and numeric evidence\n"
+                "OPERATIONAL_RISK: 1-2 sentences on near-term execution/SLA risk\n"
+                "RECOVERY_ACTION: 1-2 sentences with concrete operator actions (pause zone, reroute, throttle vendor, charge priority)\n"
+                "Then optionally 1-3 numbered supporting bullets (1. 2. 3.)\n\n"
+                "Use operational intelligence wording. No preamble."
             ),
         ).with_model("anthropic", "claude-haiku-4-5-20251001")
         response = await chat.send_message(UserMessage(
-            text=(
-                f"Current metrics: {metrics_text}\n\n"
-                f"Zone occupancy: {zone_summary}\n\n"
-                f"Zone congestion history (current/peak/spikes): {zone_health_text}\n\n"
-                f"Charging status: {charging_summary}\n\n"
-                f"Top robots by health score (lowest first):\n{robot_summary}\n\n"
-                f"Recent incidents ({len(incidents)}):\n{incident_text}\n\n"
-                "Produce 4 operational observations now."
-            )
+            text=f"Fleet operational snapshot:\n\n{context}\n\nProduce root-cause operational intelligence now."
         ))
-        lines = []
-        for raw in str(response).strip().split("\n"):
-            raw = raw.strip()
-            if not raw:
-                continue
-            for prefix in ("1.", "2.", "3.", "4.", "5.", "1)", "2)", "3)", "4)", "5)", "-", "•"):
-                if raw.startswith(prefix):
-                    raw = raw[len(prefix):].strip()
-                    break
-            if raw:
-                lines.append(raw)
-        record = {
-            "id": str(uuid.uuid4())[:8], "generated_at": now_ts(), "tick": state.tick,
-            "insights": lines[:5] or [str(response)], "snapshot": metrics,
+        parsed = parse_insight_sections(str(response))
+        analysis = {
+            "root_cause": parsed["root_cause"] or baseline["root_cause"],
+            "operational_risk": parsed["operational_risk"] or baseline["operational_risk"],
+            "recovery_action": parsed["recovery_action"] or baseline["recovery_action"],
         }
+        bullets = parsed["insights"] if parsed["insights"] else None
+        record = build_insight_record(analysis, metrics, insights=bullets)
         state.ai_insights.append(record)
         state.ai_insights = state.ai_insights[-10:]
         return record
@@ -837,16 +1195,12 @@ async def sim_insights(req: InsightRequest):
         raise
     except Exception as e:
         logger.exception("AI insight error: %s", e)
-        fallback = [
-            f"Recovery rate at {metrics.get('recovery_rate', 0)}% — review Vendor A retry logic in Assembly zone.",
-            f"Congestion at {metrics.get('congestion', 0)}% — redistribute active units away from peak zones.",
-            f"Success rate {metrics.get('success_rate', 0)}% with {totals['tasks_failed']} failures — audit docking sequences.",
-            f"{charging_summary} — monitor bay availability to avoid dispatch delays.",
-        ]
-        record = {
-            "id": str(uuid.uuid4())[:8], "generated_at": now_ts(), "tick": state.tick,
-            "insights": fallback, "snapshot": metrics, "fallback": True, "error": str(e),
-        }
+        record = build_insight_record(
+            baseline,
+            metrics,
+            fallback=True,
+            error=str(e),
+        )
         state.ai_insights.append(record)
         state.ai_insights = state.ai_insights[-10:]
         return record
