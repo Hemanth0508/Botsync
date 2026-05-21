@@ -1,0 +1,4 @@
+{
+  "summary": "Backend 7/7 pytest pass. Frontend landing + command-center verified end-to-end. AI insights via Claude Haiku 4.5 confirmed non-fallback.",
+  "success_rate": { "backend": "100%", "frontend": "100%" }
+}

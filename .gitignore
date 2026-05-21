@@ -1,0 +1,83 @@
+# Dependencies
+node_modules/
+venv/
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Build folders
+dist/
+build/
+.next/
+out/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Environment files
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Coverage
+coverage/
+
+# Cache
+.cache/
+.parcel-cache/
+
+# TypeScript
+*.tsbuildinfo
+
+# Runtime
+*.pid
+
+# SQLite / local DB
+*.sqlite
+*.db
+
+# Uploads / generated assets
+uploads/
+temp/
+tmp/
+
+# Python virtual envs
+.venv/
+env/
+
+# FastAPI
+*.sqlite3
+
+# Mac/Linux
+*.swp
+
+# Generated reports
+reports/
+exports/
+
+# AI artifacts
+*.onnx
+*.pt
+*.pth
+
+# Docker
+docker-data/
+
+# Misc
+*.bak

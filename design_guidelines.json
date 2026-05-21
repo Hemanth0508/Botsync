@@ -1,0 +1,30 @@
+{
+  "theme": "industrial-dark",
+  "primaryAccent": "#00D1FF",
+  "secondaryAccent": "#00E59B",
+  "warningAccent": "#FFB020",
+  "dangerAccent": "#FF3B30",
+
+  "fonts": {
+    "display": "Outfit",
+    "body": "IBM Plex Sans",
+    "mono": "JetBrains Mono"
+  },
+
+  "visualStyle": {
+    "panels": "dark elevated",
+    "borders": "thin cyan-gray",
+    "effects": [
+      "scanlines",
+      "radial glow",
+      "grid overlay"
+    ]
+  },
+
+  "dashboard": {
+    "layout": "operations-center",
+    "mapStyle": "2D top-down",
+    "telemetry": true,
+    "incidentStreaming": true
+  }
+}
