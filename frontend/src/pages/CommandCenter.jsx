@@ -3,6 +3,7 @@ import { AnimatePresence } from "framer-motion";
 import TopBar from "../components/TopBar";
 import WarehouseMap from "../components/WarehouseMap";
 import IncidentFeed from "../components/IncidentFeed";
+import IncidentReplay from "../components/IncidentReplay";
 import MetricsPanel from "../components/MetricsPanel";
 import AIInsights from "../components/AIInsights";
 import ControlPanel from "../components/ControlPanel";
@@ -11,9 +12,11 @@ import { fetchState, resetSim } from "../lib/api";
 import { RotateCcw } from "lucide-react";
 
 export default function CommandCenter() {
-  const [data, setData] = useState(null);
-  const [err, setErr] = useState(null);
+  const [data, setData]                   = useState(null);
+  const [err, setErr]                     = useState(null);
   const [selectedRobotId, setSelectedRobotId] = useState(null);
+  const [replayIncident, setReplayIncident]   = useState(null);
+  const [replayEvent, setReplayEvent]         = useState(null);
   const interval = useRef(null);
 
   const tick = async () => {
@@ -27,17 +30,39 @@ export default function CommandCenter() {
     return () => clearInterval(interval.current);
   }, []);
 
-  // Esc to deselect
   useEffect(() => {
-    const handler = (e) => { if (e.key === "Escape") setSelectedRobotId(null); };
+    const handler = (e) => {
+      if (e.key === "Escape") {
+        setSelectedRobotId(null);
+        setReplayIncident(null);
+      }
+    };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, []);
 
-  // Selected robot object (live — updates every tick)
   const selectedRobot = selectedRobotId
     ? data?.robots?.find(r => r.id === selectedRobotId) ?? null
     : null;
+
+  const handleReplay = (incident) => {
+    // Toggle off if clicking same incident
+    if (replayIncident?.id === incident.id) {
+      setReplayIncident(null);
+      setReplayEvent(null);
+    } else {
+      setReplayIncident(incident);
+      setReplayEvent(incident);
+      // Deselect robot when entering replay mode
+      setSelectedRobotId(null);
+    }
+  };
+
+  const handleReplaySeek = (event) => {
+    setReplayEvent(event);
+    // If event has a robot_id, highlight that robot on the map
+    if (event.robot_id) setSelectedRobotId(event.robot_id);
+  };
 
   return (
     <div className="h-screen w-screen flex flex-col bg-base overflow-hidden">
@@ -52,6 +77,9 @@ export default function CommandCenter() {
               <h2 className="font-display text-lg text-white tracking-tight">Operations Map</h2>
               <p className="font-mono-tech text-[10px] uppercase tracking-widest text-[#64748B]">
                 multi-vendor fleet · execution stream
+                {replayIncident && (
+                  <span className="ml-2 text-amber">· replay mode</span>
+                )}
               </p>
             </div>
             <button
@@ -63,12 +91,16 @@ export default function CommandCenter() {
             </button>
           </div>
 
-          {/* Map */}
           <div className="flex-1 min-h-0">
             <WarehouseMap
               data={data}
               selectedRobotId={selectedRobotId}
-              onSelectRobot={setSelectedRobotId}
+              onSelectRobot={(id) => {
+                setSelectedRobotId(id);
+                // Exit replay mode when user clicks a robot
+                if (id) setReplayIncident(null);
+              }}
+              replayEvent={replayEvent}
             />
           </div>
 
@@ -82,18 +114,33 @@ export default function CommandCenter() {
         {/* ── Right: sidebar ── */}
         <div className="w-[420px] flex-shrink-0 h-full border-l border-[#243041] bg-[#0F131A] flex flex-col overflow-hidden">
 
-          {/* Live Events — always visible */}
+          {/* Live Events */}
           <div className="flex-shrink-0" style={{ height: "260px" }}>
-            <IncidentFeed incidents={data?.incidents} />
+            <IncidentFeed
+              incidents={data?.incidents}
+              onReplay={handleReplay}
+              replayingId={replayIncident?.id}
+            />
           </div>
 
           <div className="border-t border-[#243041] flex-shrink-0" />
 
-          {/* Lower half — switches between inspector and default panels */}
+          {/* Lower half — three possible states */}
           <div className="flex-1 min-h-0 relative overflow-hidden">
             <AnimatePresence mode="wait">
-              {selectedRobot ? (
-                // AgentInspector — robot selected
+              {replayIncident ? (
+                // Replay mode
+                <div key="replay" className="absolute inset-0 overflow-y-auto p-3"
+                  style={{ scrollbarWidth: "thin", scrollbarColor: "#243041 transparent" }}>
+                  <IncidentReplay
+                    incident={replayIncident}
+                    allIncidents={data?.incidents || []}
+                    onClose={() => { setReplayIncident(null); setReplayEvent(null); }}
+                    onSeek={handleReplaySeek}
+                  />
+                </div>
+              ) : selectedRobot ? (
+                // Agent inspector
                 <div key="inspector" className="absolute inset-0 overflow-hidden">
                   <AgentInspector
                     robot={selectedRobot}
@@ -101,7 +148,7 @@ export default function CommandCenter() {
                   />
                 </div>
               ) : (
-                // Default panels — no selection
+                // Default panels
                 <div
                   key="default"
                   className="absolute inset-0 overflow-y-auto overflow-x-hidden p-3 space-y-3"
