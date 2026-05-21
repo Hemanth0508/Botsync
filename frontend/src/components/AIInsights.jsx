@@ -101,7 +101,9 @@ export default function AIInsights({ initial }) {
           <div>
             <div className="font-mono-tech text-[9px] uppercase tracking-widest text-[#64748B] mb-2">
               generated · {data.generated_at} · tick {data.tick}
-              {data.fallback && <span className="ml-2 text-amber">(fallback)</span>}
+              {(data.deterministic_fallback || data.reasoning_mode === "deterministic") && (
+                <span className="ml-2 text-amber">(deterministic reasoning)</span>
+              )}
             </div>
 
             {structured ? (

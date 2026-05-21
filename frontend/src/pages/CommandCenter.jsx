@@ -158,6 +158,8 @@ export default function CommandCenter() {
                     metrics={data?.metrics}
                     history={data?.metric_history}
                     forecast={data?.operational_forecast}
+                    kpis={data?.operational_kpis}
+                    failureCorrelation={data?.failure_correlation}
                   />
                   <ControlPanel
                     pausedZones={data?.paused_zones ?? []}

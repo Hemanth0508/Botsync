@@ -47,7 +47,7 @@ export default function WarehouseMap({ data, selectedRobotId, onSelectRobot, rep
 
   if (!data) return (
     <div className="flex-1 flex items-center justify-center text-[#64748B] font-mono-tech text-xs h-full">
-      starting simulation…
+      initializing operational runtime…
     </div>
   );
 
@@ -122,6 +122,14 @@ export default function WarehouseMap({ data, selectedRobotId, onSelectRobot, rep
 
       {/* Content area */}
       <div className="absolute inset-0 pt-9 pb-8">
+        {operational_forecast?.level === "critical" && (
+          <motion.div
+            className="absolute inset-0 pointer-events-none rounded-lg"
+            style={{ background: "radial-gradient(circle at 50% 50%, rgba(255,59,48,0.08), transparent 65%)" }}
+            animate={{ opacity: [0.35, 0.12, 0.35] }}
+            transition={{ duration: 3.2, repeat: Infinity, ease: "easeInOut" }}
+          />
+        )}
         {/* Zones */}
         {zones.map((z) => {
           const hasCharging = robots.some(r => r.status === "charging" && r.task?.zone === z.id);
@@ -207,7 +215,7 @@ export default function WarehouseMap({ data, selectedRobotId, onSelectRobot, rep
               const isReplayTrail = replayRobotId && t.robot_id === replayRobotId;
               const focusId = replayRobotId || selectedRobotId;
               const isFocused = isSelected || isReplayTrail;
-              const baseOpacity = (1 - Math.min(1, t.age / 8)) * 0.75;
+              const baseOpacity = (1 - Math.min(1, t.age / 14)) * 0.8;
               const opacity = focusId
                 ? isFocused ? baseOpacity * 1.4 : baseOpacity * 0.2
                 : baseOpacity;

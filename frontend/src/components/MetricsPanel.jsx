@@ -1,7 +1,10 @@
 import React from "react";
 import { motion } from "framer-motion";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { TrendingUp, Bot, CheckCircle2, AlertOctagon, BatteryCharging, Radar } from "lucide-react";
+import {
+  TrendingUp, Bot, CheckCircle2, AlertOctagon, BatteryCharging, Radar,
+  Timer, Activity, Gauge, GitBranch,
+} from "lucide-react";
 
 const FORECAST_LEVEL = {
   nominal:  { color: "#00E59B", label: "Nominal",  bg: "rgba(0,229,155,0.06)",  border: "rgba(0,229,155,0.2)"  },
@@ -42,10 +45,10 @@ function ChartTooltip({ active, payload, label }) {
   );
 }
 
-export default function MetricsPanel({ metrics, history, forecast }) {
+export default function MetricsPanel({ metrics, history, forecast, kpis, failureCorrelation }) {
   if (!metrics) return (
     <div className="panel p-4 text-[#64748B] font-mono-tech text-xs uppercase tracking-widest" data-testid="metrics-panel">
-      warming up…
+      initializing…
     </div>
   );
 
@@ -60,6 +63,7 @@ export default function MetricsPanel({ metrics, history, forecast }) {
   const fc = forecast || {};
   const level = fc.level || "nominal";
   const levelCfg = FORECAST_LEVEL[level] || FORECAST_LEVEL.nominal;
+  const k = kpis || {};
 
   return (
     <div className="panel flex flex-col overflow-hidden" data-testid="metrics-panel">
@@ -132,6 +136,29 @@ export default function MetricsPanel({ metrics, history, forecast }) {
               </motion.li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {k.fleet_stability_index != null && (
+        <div className="grid grid-cols-2 gap-2 px-3 pt-2" data-testid="operational-kpis">
+          <Stat testId="kpi-mttr" label="MTTR" value={k.mttr_ticks} suffix=" ticks" accent="#00D1FF" Icon={Timer} sub={`${k.recovery_latency_s}s latency`} />
+          <Stat testId="kpi-stability" label="Fleet Stability" value={k.fleet_stability_index} suffix="" accent="#00E59B" Icon={Gauge} />
+          <Stat testId="kpi-persistence" label="Cong. Persistence" value={k.congestion_persistence} suffix="%" accent="#FFB020" Icon={Activity} />
+          <Stat testId="kpi-recovery" label="Recovery Rate" value={k.recovery_rate} suffix="%" accent="#00E59B" Icon={CheckCircle2} />
+        </div>
+      )}
+
+      {failureCorrelation?.narratives?.length > 0 && (
+        <div className="mx-3 mt-2 mb-1 rounded-md border border-[#243041] bg-[#0B0F14] px-3 py-2" data-testid="failure-correlation">
+          <div className="font-mono-tech text-[9px] uppercase tracking-widest text-[#64748B] mb-1.5 flex items-center gap-1">
+            <GitBranch size={9} className="text-amber" />
+            failure correlation
+          </div>
+          {failureCorrelation.narratives.map((line, idx) => (
+            <p key={idx} className="text-[11px] leading-snug text-[#94A3B8] mb-1 last:mb-0">
+              {line}
+            </p>
+          ))}
         </div>
       )}
 

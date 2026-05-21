@@ -19,6 +19,11 @@ from starlette.middleware.cors import CORSMiddleware
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
+
+def get_llm_api_key() -> Optional[str]:
+    """Prefer ANTHROPIC_API_KEY; accept legacy EMERGENT_LLM_KEY for compatibility."""
+    return os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("EMERGENT_LLM_KEY")
+
 # --------------------------------------------------------------------------
 # Constants
 # --------------------------------------------------------------------------
@@ -124,6 +129,21 @@ class SimState:
         self.paused_zones: Dict[str, int] = {}
         self.zone_congestion_history: Dict[str, List[int]] = {z["id"]: [] for z in ZONES}
         self.bootstrap()
+        self._hydrate_operational_store()
+
+    def _hydrate_operational_store(self):
+        try:
+            from ops_store import init_db, load_incidents, load_metrics, load_insights
+            init_db()
+            for inc in load_incidents(MAX_INCIDENTS):
+                self.incidents.appendleft(inc)
+            for row in load_metrics(MAX_METRIC_HISTORY):
+                self.metric_history.append(row)
+            stored = load_insights(10)
+            if stored:
+                self.ai_insights = stored
+        except Exception as e:
+            logger.warning("Operational store hydrate skipped: %s", e)
 
     def bootstrap(self):
         callsign_idx = 0
@@ -185,12 +205,18 @@ def add_robot_event(robot: Dict, event_type: str, detail: Dict):
         robot["history"] = robot["history"][-MAX_ROBOT_HISTORY:]
 
 def log_incident(severity, kind, message, robot_id=None, zone=None, action=None):
-    state.incidents.appendleft({
+    entry = {
         "id": str(uuid.uuid4())[:8], "ts": now_ts(), "tick": state.tick,
         "severity": severity, "kind": kind, "message": message,
         "robot_id": robot_id, "zone": zone, "action": action,
-    })
+    }
+    state.incidents.appendleft(entry)
     state.totals["incidents_total"] += 1
+    try:
+        from ops_store import save_incident
+        save_incident(entry)
+    except Exception as e:
+        logger.debug("Incident persist skipped: %s", e)
 
 def assign_task(robot):
     non_charge_tasks = [t for t in TASK_TYPES if t != "charge-cycle"]
@@ -573,7 +599,7 @@ async def simulation_loop():
             attempts = max(1, state.totals["recovery_attempts"])
             attempted_tasks = max(1, state.totals["tasks_completed"] + state.totals["tasks_failed"])
             throughput = state.totals["tasks_completed"] / max(1, tick) * 60
-            state.metric_history.append({
+            metric_row = {
                 "t": tick, "active": active,
                 "charging": charging_count,
                 "completed": state.totals["tasks_completed"],
@@ -583,7 +609,13 @@ async def simulation_loop():
                 "congestion": round(state.congestion_score * 100, 1),
                 "incidents": state.totals["incidents_total"],
                 "success_rate": round(state.totals["tasks_completed"] / attempted_tasks * 100, 1),
-            })
+            }
+            state.metric_history.append(metric_row)
+            try:
+                from ops_store import save_metric
+                save_metric(metric_row)
+            except Exception as e:
+                logger.debug("Metric persist skipped: %s", e)
         except Exception as e:
             logger.exception("Simulation loop error: %s", e)
 
@@ -735,6 +767,94 @@ def compute_operational_forecast() -> Dict:
     }
 
 
+def compute_operational_kpis() -> Dict:
+    """Synthetic operational KPIs derived from runtime telemetry."""
+    metrics = state.metric_history[-1] if state.metric_history else {}
+    attempts = max(1, state.totals["recovery_attempts"])
+    recoveries = max(0, state.totals["recoveries"])
+    mttr_ticks = round((attempts / max(1, recoveries)) * 1.15, 1)
+    recovery_latency_s = round(mttr_ticks * TICK_INTERVAL, 1)
+
+    hist = list(state.metric_history)[-15:]
+    elevated_ticks = sum(1 for h in hist if h.get("congestion", 0) >= 45)
+    congestion_persistence = round(elevated_ticks / max(1, len(hist)) * 100, 1)
+
+    avg_health = sum(r["health_score"] for r in state.robots) / max(1, len(state.robots))
+    reroute_load = len(state.trails) + sum(
+        1 for r in state.robots if r["status"] in ("rerouting", "retrying")
+    )
+    fleet_stability_index = round(max(0.0, min(100.0, avg_health - reroute_load * 2.2)), 1)
+
+    return {
+        "mttr_ticks": mttr_ticks,
+        "recovery_latency_s": recovery_latency_s,
+        "congestion_persistence": congestion_persistence,
+        "fleet_stability_index": fleet_stability_index,
+        "recovery_rate": metrics.get("recovery_rate", 0),
+        "congestion": metrics.get("congestion", 0),
+    }
+
+
+def compute_failure_correlation() -> Dict:
+    """Heuristic vendor/zone attribution for reroute cascades."""
+    incidents = list(state.incidents)
+    reroute_kinds = ("reroute", "stalled_execution", "congestion_spike", "operator_reroute_all")
+    cascade = [
+        i for i in incidents
+        if i.get("kind") in reroute_kinds
+        or "reroute" in (i.get("message") or "").lower()
+    ]
+    total = len(cascade) or 1
+
+    by_vendor: Dict[str, int] = {v: 0 for v in VENDOR_PROFILES}
+    by_zone: Dict[str, int] = {}
+    for inc in cascade:
+        rid = inc.get("robot_id") or ""
+        if rid and rid[0] in by_vendor:
+            by_vendor[rid[0]] += 1
+        zid = inc.get("zone")
+        if zid:
+            by_zone[zid] = by_zone.get(zid, 0) + 1
+
+    hot_zone = None
+    if state.zone_congestion_history:
+        zone_stats = zone_congestion_stats()
+        hot = [z for z in zone_stats if z["id"] != CHARGING_ZONE_ID and z["spikes"] >= 2]
+        hot_zone = hot[0] if hot else None
+
+    narratives: List[str] = []
+    if cascade:
+        top_vendor = max(by_vendor.items(), key=lambda x: x[1])
+        if top_vendor[1] > 0:
+            pct = round(top_vendor[1] / total * 100)
+            vname = VENDOR_PROFILES[top_vendor[0]]["name"]
+            zone_phrase = f" during congestion spikes in {hot_zone['label']} zone" if hot_zone else ""
+            narratives.append(
+                f"{vname} contributed {pct}% of reroute cascades in the current window{zone_phrase}."
+            )
+        if by_zone:
+            top_zone_id, zcount = max(by_zone.items(), key=lambda x: x[1])
+            narratives.append(
+                f"{zone_label(top_zone_id)} accounts for {round(zcount / total * 100)}% of localized reroute propagation events."
+            )
+    if not narratives:
+        narratives.append(
+            "Reroute cascade density is within baseline — no dominant vendor-zone correlation in the current window."
+        )
+
+    return {
+        "narratives": narratives[:3],
+        "by_vendor": {
+            VENDOR_PROFILES[v]["name"]: round(by_vendor[v] / total * 100, 1)
+            for v in by_vendor
+        },
+        "by_zone": {
+            zone_label(z): round(c / total * 100, 1) for z, c in by_zone.items()
+        },
+        "cascade_count": len(cascade),
+    }
+
+
 # --------------------------------------------------------------------------
 # FastAPI
 # --------------------------------------------------------------------------
@@ -784,6 +904,8 @@ async def sim_state():
         "congestion_spike_active": state.congestion_spike_ticks_remaining > 0,
         "zone_congestion_stats": zone_congestion_stats(),
         "operational_forecast": compute_operational_forecast(),
+        "operational_kpis": compute_operational_kpis(),
+        "failure_correlation": compute_failure_correlation(),
     }
 
 @api_router.get("/sim/incidents")
@@ -797,6 +919,8 @@ async def sim_metrics():
         "history": list(state.metric_history),
         "totals": state.totals,
         "operational_forecast": compute_operational_forecast(),
+        "operational_kpis": compute_operational_kpis(),
+        "failure_correlation": compute_failure_correlation(),
     }
 
 @api_router.get("/sim/robot/{robot_id}")
@@ -1071,6 +1195,7 @@ def build_insight_record(
     analysis: Dict[str, str],
     metrics: Dict,
     insights: Optional[List[str]] = None,
+    reasoning_mode: str = "llm",
     **extra,
 ) -> Dict:
     rc = analysis.get("root_cause", "")
@@ -1081,7 +1206,7 @@ def build_insight_record(
         f"Operational risk: {risk}",
         f"Suggested recovery: {action}",
     ]
-    return {
+    record = {
         "id": str(uuid.uuid4())[:8],
         "generated_at": now_ts(),
         "tick": state.tick,
@@ -1090,8 +1215,17 @@ def build_insight_record(
         "operational_risk": risk,
         "recovery_action": action,
         "snapshot": metrics,
+        "reasoning_mode": reasoning_mode,
         **extra,
     }
+    if extra.get("fallback"):
+        record["deterministic_fallback"] = True
+    try:
+        from ops_store import save_insight
+        save_insight(record)
+    except Exception as e:
+        logger.debug("Insight persist skipped: %s", e)
+    return record
 
 
 def format_insight_context(signals: Dict, incidents: List[Dict]) -> str:
@@ -1159,9 +1293,9 @@ async def sim_insights(req: InsightRequest):
 
     try:
         from emergentintegrations.llm.chat import LlmChat, UserMessage
-        api_key = os.environ.get("EMERGENT_LLM_KEY")
+        api_key = get_llm_api_key()
         if not api_key:
-            raise HTTPException(status_code=500, detail="EMERGENT_LLM_KEY not configured")
+            raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not configured")
         chat = LlmChat(
             api_key=api_key, session_id=f"insights-{state.tick}",
             system_message=(
@@ -1187,7 +1321,7 @@ async def sim_insights(req: InsightRequest):
             "recovery_action": parsed["recovery_action"] or baseline["recovery_action"],
         }
         bullets = parsed["insights"] if parsed["insights"] else None
-        record = build_insight_record(analysis, metrics, insights=bullets)
+        record = build_insight_record(analysis, metrics, insights=bullets, reasoning_mode="llm")
         state.ai_insights.append(record)
         state.ai_insights = state.ai_insights[-10:]
         return record
@@ -1198,6 +1332,7 @@ async def sim_insights(req: InsightRequest):
         record = build_insight_record(
             baseline,
             metrics,
+            reasoning_mode="deterministic",
             fallback=True,
             error=str(e),
         )
@@ -1208,6 +1343,11 @@ async def sim_insights(req: InsightRequest):
 @api_router.post("/sim/reset")
 async def sim_reset():
     global state
+    try:
+        from ops_store import clear_session
+        clear_session()
+    except Exception as e:
+        logger.warning("Operational store reset skipped: %s", e)
     state = SimState()
     return {"ok": True, "started_at": state.started_at}
 
@@ -1223,8 +1363,13 @@ logger = logging.getLogger("fril")
 
 @app.on_event("startup")
 async def startup_event():
+    try:
+        from ops_store import init_db
+        init_db()
+    except Exception as e:
+        logger.warning("Operational store init skipped: %s", e)
     asyncio.create_task(simulation_loop())
-    logger.info("FRIL backend booted with %d robots across %d zones", len(state.robots), len(ZONES))
+    logger.info("FRIL orchestration runtime online — %d units across %d zones", len(state.robots), len(ZONES))
 
 @app.on_event("shutdown")
 async def shutdown_event():

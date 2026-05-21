@@ -141,6 +141,26 @@ export default function IncidentReplay({ incident, allIncidents = [], onClose, o
           <span>{currentIdx + 1} / {timeline.length}</span>
           <span>{timeline[timeline.length - 1]?.ts || "--"}</span>
         </div>
+        <div className="flex gap-0.5 mt-2 h-2 rounded overflow-hidden bg-[#1A1F28]" data-testid="replay-heatmap">
+          {timeline.map((ev, i) => {
+            const sev = ev.severity || "info";
+            const heat =
+              sev === "critical" ? "#FF3B30"
+              : sev === "warning" ? "#FFB020"
+              : sev === "recovery" ? "#00E59B"
+              : "#475569";
+            return (
+              <div
+                key={`heat-${ev.id}`}
+                className="flex-1 min-w-[3px] transition-opacity"
+                style={{
+                  background: heat,
+                  opacity: i === currentIdx ? 1 : i < currentIdx ? 0.55 : 0.22,
+                }}
+              />
+            );
+          })}
+        </div>
       </div>
 
       {/* Controls */}

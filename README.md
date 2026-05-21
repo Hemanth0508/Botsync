@@ -2,77 +2,262 @@
 
 **Operational intelligence for multi-vendor autonomous warehouse fleets.**
 
-FRIL is a full-stack demonstration platform that simulates a heterogeneous robot fleet, surfaces live execution health on a spatial operations map, and layers heuristic + LLM reasoning on top of congestion memory, reliability scoring, and incident history. It is built to show how a shift supervisor would *see*, *replay*, *forecast*, and *act* on fleet risk—not just read raw metrics.
+Designed to explore how warehouse operators can move from reactive monitoring toward **predictive operational resilience**.
+
+FRIL orchestrates a heterogeneous robot fleet runtime with synthetic operational events, surfaces live execution health on a spatial operations map, and layers deterministic + AI-assisted reasoning on congestion memory, reliability scoring, and incident history. Shift supervisors can *see*, *replay*, *forecast*, and *act* on fleet risk—not only read telemetry.
 
 ---
 
-## What You Get
+## Why This Exists
+
+Modern warehouse fleets increasingly operate across heterogeneous robot vendors, each with different routing behavior, reliability profiles, and recovery characteristics.
+
+Most operational dashboards expose telemetry.
+
+**FRIL focuses on operational reasoning:**
+
+- Identifying instability before failure cascades
+- Surfacing congestion memory spatially
+- Correlating reroutes with reliability degradation
+- Accelerating operator recovery decisions
+
+FRIL models how localized congestion propagates into **reroute cascades**, queue instability, and reliability degradation across adjacent operational zones.
+
+The goal is not visualization alone, but **operational resilience visibility**.
+
+---
+
+## Preview
+
+> Add screenshots or GIFs under `memory/assets/` (see `memory/assets/README.md`).
+
+![Command Center](./memory/assets/command-center.png)
+
+![Incident Replay](./memory/assets/replay.gif)
+
+---
+
+## Core Capabilities
 
 | Layer | Capability |
 |--------|------------|
-| **Live simulation** | 16 robots across 3 vendors and 6 warehouse zones, ~0.9s tick, in-memory FastAPI backend |
-| **Spatial memory** | Per-robot route checkpoints, reroute trails, zone occupancy history with spike tinting |
-| **Reliability scoring** | 0–100 health score per robot, `nominal` / `degraded` / `critical` tiers |
-| **Incident replay** | Scrub timeline events; pulse + dim robots on the map during replay |
-| **Predictive ops** | Heuristic congestion-escalation forecast (`nominal` / `elevated` / `critical`) with zone-level risk |
-| **AI analysis** | Claude Haiku 4.5 root-cause reasoning with structured recovery guidance (optional API key) |
-| **Operator controls** | Fleet reroute, zone pause, simulated congestion spike |
+| **Orchestration runtime** | 16 robots · 3 vendors · 6 zones · ~0.9s tick · FastAPI backend |
+| **Spatial memory** | Route checkpoints, reroute trails (time-faded), zone occupancy history |
+| **Reliability scoring** | 0–100 health · `nominal` / `degraded` / `critical` tiers · history chart |
+| **Incident replay** | Timeline scrubber · severity heatmap · map focus pulse |
+| **Predictive ops** | Congestion-escalation forecast · `nominal` / `elevated` / `critical` |
+| **Failure correlation** | Vendor/zone attribution for reroute cascades |
+| **Operational KPIs** | MTTR · recovery latency · congestion persistence · fleet stability index |
+| **AI reasoning** | AI-assisted root-cause analysis with structured recovery recommendations |
+| **Operator controls** | Fleet reroute · zone pause · synthetic congestion event |
+| **Operational store** | SQLite persistence for incidents, metrics, and insight sessions |
 
 ---
 
-## Quick Start
+## Operational Signals Modeled
+
+FRIL tracks and correlates:
+
+- Congestion persistence
+- Route instability
+- Vendor-specific failure distribution
+- Reliability degradation drift
+- Recovery latency
+- Battery-risk escalation
+- Zone saturation frequency
+- Dispatch imbalance
+- Reroute cascade density
+
+---
+
+## Architecture
+
+```mermaid
+flowchart TB
+    subgraph runtime [Orchestration Runtime]
+        Tick[Tick Loop]
+        Fleet[16 Heterogeneous Units]
+        Zones[Zone Occupancy Memory]
+    end
+
+    subgraph intel [Intelligence Layers]
+        Forecast[Predictive Forecast]
+        Correlation[Failure Correlation]
+        KPIs[Operational KPIs]
+        Deterministic[Deterministic Reasoning]
+        LLM[AI-Assisted Analysis]
+    end
+
+    subgraph store [Operational Store]
+        SQLite[(SQLite)]
+    end
+
+    subgraph ui [Command Center]
+        Map[Warehouse Map]
+        Metrics[Metrics + Alerts]
+        Replay[Incident Replay]
+    end
+
+    Tick --> Fleet --> Zones
+    Fleet --> Forecast
+    Fleet --> Correlation
+    Fleet --> KPIs
+    Zones --> Forecast
+    Fleet --> Deterministic
+    Fleet --> LLM
+    runtime --> SQLite
+    Forecast --> ui
+    Correlation --> ui
+    KPIs --> ui
+```
+
+### Architectural tradeoffs
+
+The platform currently uses **polling** instead of WebSockets to prioritize deterministic state snapshots and reduce synchronization complexity during replay operations.
+
+Operational memory is persisted locally via SQLite so incident and metric history survive process restarts. This can later transition to event-stream transport and a shared time-series store for higher-frequency production deployments.
+
+### AI reasoning layer
+
+Structured analysis returns:
+
+- **Root Cause Hypothesis**
+- **Operational Risk**
+- **Suggested Recovery Action**
+
+When the LLM path is unavailable, **deterministic operational reasoning** produces the same structure from live signals (congestion history, vendor instability, battery stress, reroute behavior).
+
+Model implementation: Claude Haiku 4.5 via the Emergent integrations SDK (see Technical Implementation).
+
+---
+
+## Command Center Walkthrough
+
+| Interaction | Behavior |
+|-------------|----------|
+| Click robot | Agent Inspector — battery, reliability chart, event timeline |
+| Click incident **replay** | Scrubber + map pulse/dim + severity heatmap |
+| **Analyze** (AI panel) | Root-cause operational intelligence |
+| Operator controls | Reroute all · pause zone · inject congestion event |
+| **Esc** | Close inspector or exit replay |
+
+**Map cues:** zone spike tinting · `FCST` forecast-risk badges · critical-level congestion pulse · fading reroute trails
+
+---
+
+## Technical Implementation
+
+### Stack
+
+| | |
+|--|--|
+| **Backend** | FastAPI · asyncio orchestration loop · Pydantic · SQLite (`ops_store.py`) |
+| **Frontend** | React 19 · React Router · Tailwind · Framer Motion · Recharts |
+| **AI** | Claude Haiku 4.5 (`emergentintegrations`) |
+
+### Vendor profiles
+
+| Vendor | Traits |
+|--------|--------|
+| **A** | High speed · higher failure rate · higher ack lag |
+| **B** | Slower · lowest failure rate · strongest reliability |
+| **C** | Balanced throughput and recovery |
+
+### Reliability formula
+
+```
+base = completed / (completed + failed) × 100
+penalty = (recent_failures / recent_tasks) × 20
+health_score = clamp(base − penalty, 0, 100)
+```
+
+### Predictive forecast (heuristic)
+
+Combines spike frequency, reroute activity, queue instability (throughput variance + rising congestion), reliability drift, and fleet congestion level into `nominal` / `elevated` / `critical` with per-zone `zone_risks[]`.
+
+---
+
+## API Reference
+
+Base path: `/api`
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/sim/state` | Full snapshot + forecast + KPIs + correlation |
+| `GET` | `/sim/metrics` | Metrics history + intelligence fields |
+| `GET` | `/sim/incidents` | Incident stream |
+| `GET` | `/sim/robot/{id}` | Unit detail |
+| `POST` | `/sim/insights` | Generate operational analysis |
+| `POST` | `/sim/reset` | Reset runtime + clear operational store |
+| `POST` | `/sim/control/reroute-all` | Fleet reroute |
+| `POST` | `/sim/control/pause-zone` | Zone hold |
+| `POST` | `/sim/control/spike-congestion` | Synthetic congestion event |
+
+### Added fields (non-breaking)
+
+```jsonc
+"operational_forecast": { "level", "escalation_probability", "alerts", "zone_risks", "signals" },
+"operational_kpis": { "mttr_ticks", "recovery_latency_s", "congestion_persistence", "fleet_stability_index" },
+"failure_correlation": { "narratives", "by_vendor", "by_zone", "cascade_count" }
+```
+
+Insights response also includes `reasoning_mode`: `"llm"` | `"deterministic"`.
+
+---
+
+## Setup
 
 ### Prerequisites
 
 - Python 3.10+
 - Node.js 18+
-- (Optional) `EMERGENT_LLM_KEY` for live AI insights
 
-### 1. Backend
+### Backend
 
 ```bash
 cd backend
 pip install -r requirements.txt
 ```
 
-Create `backend/.env`:
+`backend/.env`:
 
 ```env
-EMERGENT_LLM_KEY=your_key_here          # optional — enables LLM insights; rule-based fallback without it
-CORS_ORIGINS=http://localhost:3000      # optional — defaults to *
+ANTHROPIC_API_KEY=your_key_here
+CORS_ORIGINS=http://localhost:3000
 ```
+
+> `EMERGENT_LLM_KEY` is still accepted for backward compatibility.
 
 ```bash
 python -m uvicorn server:app --reload --host 0.0.0.0 --port 8000
 ```
 
-API base: `http://localhost:8000/api`
+Operational memory is written to `backend/data/fril_ops.db` (gitignored).
 
-### 2. Frontend
+### Frontend
 
 ```bash
 cd frontend
 npm install
 ```
 
-Create `frontend/.env` (optional):
+`frontend/.env`:
 
 ```env
 REACT_APP_BACKEND_URL=http://localhost:8000
+VITE_API_URL=http://localhost:8000
 ```
 
 ```bash
 npm start
 ```
 
-Open **http://localhost:3000**
-
 | Route | Description |
 |-------|-------------|
-| `/` | Product landing page |
+| `/` | Product landing |
 | `/command-center` | Live operations dashboard |
 
-### 3. Run tests
+### Tests
 
 ```bash
 cd backend
@@ -82,292 +267,43 @@ pytest tests/ -v
 
 ---
 
-## Command Center Tour
-
-The dashboard polls `/api/sim/state` every ~1.1s and composes four areas:
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│  Operations Map          │  Incident Feed (live)                        │
-│  · zones + robots        │  · severity-colored stream                   │
-│  · replay focus          │  · replay launcher                         │
-│  · forecast-risk zones   ├──────────────────────────────────────────────┤
-│  · route overlays        │  Agent Inspector │ Replay │ Metrics / AI    │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-**Map interactions**
-
-- Click a robot → open **Agent Inspector** (battery, task, reliability chart, event timeline)
-- Click empty map → deselect
-- **Esc** → close inspector or exit replay
-
-**Incident replay**
-
-- Click **replay** on an incident → sidebar becomes scrubber; related robot pulses (amber), others dim
-- Timeline seeks update map focus via `replayEvent`
-
-**Predictive panel** (Metrics)
-
-- `operational_forecast.level`: `nominal` | `elevated` | `critical`
-- Escalation probability + alerts driven by spike frequency, reroutes, queue instability, reliability drift
-- Map zones with forecast risk show dashed borders and `FCST` badges
-
-**AI Insights**
-
-- Click **analyze** → POST `/api/sim/insights`
-- Returns structured sections: **Root Cause Hypothesis**, **Operational Risk**, **Suggested Recovery Action**
-- Falls back to rule-based inference if the LLM is unavailable
-
-**Operator controls**
-
-- Reroute all active units
-- Pause a zone (8 ticks)
-- Simulate congestion spike (6 ticks)
-
----
-
-## Simulation Model
-
-### Vendors (heterogeneous profiles)
-
-| Vendor | Color | Traits |
-|--------|-------|--------|
-| **A** | Cyan | High speed · higher failure rate · higher ack lag |
-| **B** | Emerald | Slower · lowest failure rate · best reliability |
-| **C** | Amber | Balanced speed · moderate failure · moderate lag |
-
-Fleet size: **6 + 5 + 5 = 16 robots**, each with callsign, battery, task queue, and event history.
-
-### Zones
-
-`Inbound` · `Outbound` · `Storage` · `Assembly` · `Inspection` · `Charging`
-
-Zone occupancy is tracked per tick. Repeated density spikes (≥4 robots) tint zones amber/red and feed the predictive layer.
-
-### Robot lifecycle
-
-`idle` → `executing` → (`rerouting` / `retrying` on failure) → `charging` on low battery or charge-cycle task
-
-Notable behaviors:
-
-- Critical battery override (<10%) forces charge dispatch
-- Congestion redistribution reroutes non-charging units
-- Docking failures, ack timeouts, and stalled execution generate incidents + recovery actions
-- Health score recalculates on task complete/fail with recency-weighted penalty
-
----
-
-## Intelligence Architecture
-
-```mermaid
-flowchart TB
-    subgraph sim [Simulation Engine]
-        Tick[Tick Loop ~0.9s]
-        Robots[16 Robots]
-        Zones[Zone Occupancy History]
-        Incidents[Incident Log]
-    end
-
-    subgraph memory [Operational Memory]
-        Route[Route Checkpoints]
-        Trails[Reroute Trails]
-        Health[Health Scores 0-100]
-        Metrics[Metric History]
-    end
-
-    subgraph intel [Intelligence Layers]
-        Forecast[Heuristic Forecast]
-        Rules[Rule-Based RCA Fallback]
-        LLM[Claude Haiku Insights]
-    end
-
-    subgraph ui [React Command Center]
-        Map[WarehouseMap]
-        Panel[MetricsPanel]
-        AI[AIInsights]
-        Replay[IncidentReplay]
-    end
-
-    Tick --> Robots --> memory
-    memory --> Forecast
-    memory --> Rules
-    memory --> LLM
-    Forecast --> Panel
-    Forecast --> Map
-    Rules --> AI
-    LLM --> AI
-    Incidents --> Replay
-```
-
-### Reliability scoring
-
-```
-base = completed / (completed + failed) × 100
-penalty = (recent_failures / recent_tasks) × 20
-health_score = clamp(base − penalty, 0, 100)
-```
-
-Tiers: **critical** &lt;50 · **degraded** &lt;75 · **nominal** ≥75
-
-The inspector renders a **Recharts** reliability history (derived from events or `reliability_history` when present).
-
-### Predictive forecast (heuristic)
-
-Signals combined into a 0–100 score:
-
-- Zone spike frequency (recent window)
-- Active reroute/retry count + live trails
-- Throughput variance + rising congestion (queue instability)
-- Count of degraded/critical health robots
-- Operator congestion spike flag
-
-Per-zone `zone_risks[]` powers map `FCST` highlighting.
-
-### AI insights (optional LLM)
-
-When `EMERGENT_LLM_KEY` is set, Claude Haiku 4.5 receives:
-
-- Congestion history (current / peak / spikes)
-- Vendor failure shares and reroute counts
-- Lowest-health robots + reroute reasons
-- Recent incident window
-
-Response is parsed into `root_cause`, `operational_risk`, `recovery_action` with rule-based fallback on error.
-
----
-
-## API Reference
-
-All routes are prefixed with `/api`.
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/` | Service health |
-| `GET` | `/sim/state` | Full snapshot: robots, zones, incidents, metrics, forecast, AI cache |
-| `GET` | `/sim/incidents?limit=40` | Incident list |
-| `GET` | `/sim/metrics` | Current metrics + history + forecast |
-| `GET` | `/sim/robot/{robot_id}` | Single robot detail |
-| `POST` | `/sim/insights` | Generate operational analysis `{ "horizon": 25 }` |
-| `POST` | `/sim/reset` | Reset simulation |
-| `POST` | `/sim/control/reroute-all` | Reroute executing/retrying units |
-| `POST` | `/sim/control/pause-zone` | `{ "zone_id": "assembly", "duration_ticks": 8 }` |
-| `POST` | `/sim/control/spike-congestion` | Force congestion spike |
-
-### Key `sim/state` fields
-
-```jsonc
-{
-  "tick": 142,
-  "robots": [/* id, vendor, x, y, battery, health_score, reliability_tier, history, route_history, ... */],
-  "incidents": [/* severity, kind, message, robot_id, zone, tick, ... */],
-  "metrics": { "active", "charging", "congestion", "throughput", "recovery_rate", ... },
-  "metric_history": [/* time series */],
-  "zone_congestion_stats": [{ "id", "label", "current", "peak", "avg", "spikes" }],
-  "operational_forecast": {
-    "level": "elevated",
-    "escalation_probability": 42.5,
-    "alerts": ["..."],
-    "zone_risks": [{ "id", "label", "level", "score" }],
-    "signals": { "spike_frequency", "reroute_activity", "queue_instability", ... }
-  },
-  "ai_insights": [/* last 5 cached records */]
-}
-```
-
-### Insights response shape
-
-```jsonc
-{
-  "id": "a1b2c3d4",
-  "generated_at": "14:32:01",
-  "tick": 142,
-  "insights": ["..."],           // legacy bullet list (still populated)
-  "root_cause": "...",
-  "operational_risk": "...",
-  "recovery_action": "...",
-  "snapshot": { /* metrics */ },
-  "fallback": true               // present when LLM unavailable
-}
-```
-
----
-
 ## Project Structure
 
 ```
 fril/
 ├── backend/
-│   ├── server.py              # Simulation engine + FastAPI + intelligence helpers
-│   ├── requirements.txt
-│   ├── tests/
-│   │   └── test_fril_backend.py
-│   └── .env                   # EMERGENT_LLM_KEY, CORS_ORIGINS (gitignored)
-├── frontend/
-│   ├── public/
-│   └── src/
-│       ├── App.js             # Routes: /, /command-center
-│       ├── lib/api.js         # Axios client
-│       ├── components/
-│       │   ├── WarehouseMap.jsx      # Map, zones, robots, replay + forecast UX
-│       │   ├── AgentInspector.jsx    # Robot detail + ReliabilityChart
-│       │   ├── ReliabilityChart.jsx  # Recharts reliability history
-│       │   ├── IncidentFeed.jsx      # Live incident stream
-│       │   ├── IncidentReplay.jsx    # Timeline scrubber
-│       │   ├── MetricsPanel.jsx      # Metrics + predictive alerts
-│       │   ├── AIInsights.jsx        # Root-cause analysis UI
-│       │   ├── ControlPanel.jsx      # Operator actions
-│       │   └── TopBar.jsx
-│       ├── pages/
-│       │   ├── Landing.jsx
-│       │   └── CommandCenter.jsx
-│       └── index.css          # Operational dark theme tokens
-├── memory/                    # PRD + internal notes
-└── README.md
+│   ├── server.py           # Orchestration engine + API + intelligence
+│   ├── ops_store.py        # SQLite operational memory
+│   ├── data/               # Local ops DB (generated)
+│   └── tests/
+├── frontend/src/
+│   ├── components/
+│   │   ├── WarehouseMap.jsx
+│   │   ├── MetricsPanel.jsx
+│   │   ├── AgentInspector.jsx
+│   │   ├── ReliabilityChart.jsx
+│   │   ├── IncidentReplay.jsx
+│   │   ├── AIInsights.jsx
+│   │   └── ControlPanel.jsx
+│   └── pages/
+│       ├── Landing.jsx
+│       └── CommandCenter.jsx
+└── memory/assets/           # Preview screenshots (optional)
 ```
 
 ---
 
-## Tech Stack
+## Configuration
 
-| | |
-|--|--|
-| **Backend** | FastAPI · asyncio simulation loop · Pydantic · uvicorn |
-| **Frontend** | React 19 · React Router 7 · Tailwind CSS 3 · Framer Motion · Recharts · Lucide |
-| **AI** | Claude Haiku 4.5 via `emergentintegrations` (Emergent LLM key) |
-
----
-
-## Configuration Reference
-
-| Variable | Where | Default | Purpose |
-|----------|-------|---------|---------|
-| `EMERGENT_LLM_KEY` | `backend/.env` | — | Enables live LLM insights |
-| `CORS_ORIGINS` | `backend/.env` | `*` | Comma-separated allowed origins |
-| `REACT_APP_BACKEND_URL` | `frontend/.env` | `http://localhost:8000` | API host for `lib/api.js` |
-
-> **Note:** `ControlPanel.jsx` uses `VITE_API_URL` for direct axios calls. For local dev, either set `VITE_API_URL=http://localhost:8000` in `frontend/.env` or rely on its built-in default.
-
----
-
-## Design Notes
-
-- **Dark operational UI** — base `#0B0F14`, panel borders `#243041`, accent cyan/emerald/amber/rose
-- **No persistence** — simulation state is in-memory; restart backend or call `/sim/reset`
-- **No auth** — demo / lab environment only
-- **Polling model** — frontend pulls state; no WebSockets required
-
----
-
-## Roadmap Ideas
-
-- Persist session exports (incidents + metric history)
-- WebSocket push for sub-second map updates
-- Backend `reliability_history` time series per robot
-- Playwright e2e for command-center flows
+| Variable | Location | Purpose |
+|----------|----------|---------|
+| `ANTHROPIC_API_KEY` | `backend/.env` | AI-assisted insights |
+| `CORS_ORIGINS` | `backend/.env` | Allowed frontend origins |
+| `REACT_APP_BACKEND_URL` | `frontend/.env` | API host (`lib/api.js`) |
+| `VITE_API_URL` | `frontend/.env` | API host (operator controls) |
 
 ---
 
 ## License
 
-Internal / demonstration project — BotSync FRIL v0.1.
+BotSync FRIL · operational intelligence layer · v0.1
