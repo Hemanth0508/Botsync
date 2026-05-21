@@ -3,7 +3,8 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Sliders, GitBranch, PauseCircle, Zap, CheckCircle, AlertCircle, Loader } from "lucide-react";
 import axios from "axios";
 
-const API = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "http://localhost:8000";
+const API = `${BACKEND_URL}/api`;
 
 const ZONES = [
   { id: "inbound",    label: "Inbound" },
