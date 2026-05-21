@@ -8,7 +8,7 @@ An operational intelligence platform for multi-vendor autonomous warehouse fleet
 ```bash
 cd backend
 pip install -r requirements.txt
-uvicorn server:app --reload --port 8000
+python -m uvicorn server:app --reload --host 0.0.0.0 --port 8000
 ```
 
 ### Frontend
