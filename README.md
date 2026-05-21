@@ -4,13 +4,6 @@ Operational intelligence for multi-vendor autonomous warehouse fleets.
 
 [Live Demo](https://botsync-fril.vercel.app/) • [Command Center](https://botsync-fril.vercel.app/command-center) • [Backend API](https://botsync.onrender.com) • [GitHub](https://github.com/Hemanth0508/Botsync)
 
-![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-009688?style=flat-square&logo=fastapi&logoColor=white)
-![React](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black)
-![Operational Intelligence](https://img.shields.io/badge/Operational-Intelligence-1a1a2e?style=flat-square)
-![Multi-Agent Systems](https://img.shields.io/badge/Multi--Agent-Systems-6c3483?style=flat-square)
-![AI-Assisted Reasoning](https://img.shields.io/badge/AI--Assisted-Reasoning-FF6F00?style=flat-square)
-![Warehouse Simulation](https://img.shields.io/badge/Warehouse-Simulation-2c3e50?style=flat-square)
-
 ---
 
 ## Live Demo
