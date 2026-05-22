@@ -2,9 +2,7 @@ import React, { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Sliders, GitBranch, PauseCircle, Zap, CheckCircle, AlertCircle, Loader } from "lucide-react";
 import axios from "axios";
-
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "http://localhost:8000";
-const API = `${BACKEND_URL}/api`;
+import { API } from "../lib/api";
 
 const ZONES = [
   { id: "inbound",    label: "Inbound" },
@@ -85,19 +83,19 @@ export default function ControlPanel({ pausedZones = [], congestionSpikeActive =
 
   const handleRerouteAll = () =>
     rerouteAll.run(
-      () => axios.post(`${API}/api/sim/control/reroute-all`),
+      () => axios.post(`${API}/sim/control/reroute-all`),
       (r) => `${r.data.count} units rerouted`
     );
 
   const handlePauseZone = () =>
     pauseZone.run(
-      () => axios.post(`${API}/api/sim/control/pause-zone`, { zone_id: selectedZone, duration_ticks: 8 }),
+      () => axios.post(`${API}/sim/control/pause-zone`, { zone_id: selectedZone, duration_ticks: 8 }),
       (r) => `${ZONES.find(z => z.id === r.data.zone_id)?.label} paused (${r.data.frozen_robots.length} held)`
     );
 
   const handleSpikeCongestion = () =>
     spikeCong.run(
-      () => axios.post(`${API}/api/sim/control/spike-congestion`),
+      () => axios.post(`${API}/sim/control/spike-congestion`),
       () => "Congestion spike active — 6 ticks"
     );
 
